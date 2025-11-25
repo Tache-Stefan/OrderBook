@@ -1,4 +1,4 @@
-#include "../include/OrderBook.h"
+#include "OrderBook.h"
 #include <cassert>
 
 OrderBook::OrderBook(double tick_size)

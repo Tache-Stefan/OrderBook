@@ -1,4 +1,4 @@
-#include "../include/PriceLevel.h"
+#include "PriceLevel.h"
 
 PriceLevel::PriceLevel(std::uint64_t price)
     : m_price(price) {}
