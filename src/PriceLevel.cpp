@@ -1,6 +1,6 @@
 #include "PriceLevel.h"
 
-PriceLevel::PriceLevel(std::uint64_t price)
+PriceLevel::PriceLevel(uint64_t price)
     : m_price(price) {}
 
 void PriceLevel::add_order(Order& order) {
@@ -13,4 +13,8 @@ void PriceLevel::remove_order(Order& order) {
     m_total_quantity -= order.get_quantity();
     m_orders.erase(order.get_iterator_in_level());
     order.set_iterator_in_level(Order::LevelIterator{});
+}
+
+void PriceLevel::decrease_quantity(uint64_t qty) {
+    m_total_quantity = (qty >= m_total_quantity) ? 0 : (m_total_quantity - qty);
 }
