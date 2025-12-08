@@ -1,8 +1,25 @@
 #include "OrderBook.h"
 #include <cassert>
+#include <cmath>
 
 OrderBook::OrderBook(double tick_size)
     : m_tick_size(tick_size) {}
+
+void OrderBook::submit_order(uint64_t order_id,
+                             double raw_price,
+                             uint64_t quantity,
+                             uint64_t timestamp,
+                             Side side) {
+    uint64_t price_in_ticks = static_cast<uint64_t>(std::llround(raw_price / m_tick_size));
+    assert(std::fmod(raw_price, m_tick_size) < 1e-9 && "Price is not aligned to tick size");
+
+    auto [it, inserted] = m_owned_orders.emplace(order_id,
+                          Order(order_id, price_in_ticks, quantity, timestamp, side));
+    
+    Order& order = it->second;
+    add_order(order);
+    match_order(order);
+}
 
 void OrderBook::add_order(Order& order) {
     uint64_t order_price = order.get_price();
@@ -50,40 +67,19 @@ bool OrderBook::cancel_order(uint64_t order_id) {
 }
 
 void OrderBook::match_order(Order& incoming) {
-    auto* opposite = (incoming.get_side() == Side::BID) ? &m_asks : &m_bids;
-
-    while (incoming.get_quantity() > 0 && !opposite->empty()) {
-        auto it_level = opposite->begin();
-        PriceLevel& level = it_level->second;
-        Order* best_opposite = level.best_order();
-
-        if ((incoming.get_side() == Side::BID && incoming.get_price() < best_opposite->get_price()) ||
-            (incoming.get_side() == Side::ASK && incoming.get_price() > best_opposite->get_price())) {
-            break;
-        }
-
-        uint64_t trade_qty = std::min(incoming.get_quantity(), best_opposite->get_quantity());
-
-        incoming.decrease_quantity(trade_qty);
-        best_opposite->decrease_quantity(trade_qty);
-        level.decrease_quantity(trade_qty);
-
-        if (best_opposite->get_quantity() == 0) {
-            cancel_order(best_opposite->get_order_id());
-        }
+    if (incoming.get_side() == Side::BID) {
+        match_against(incoming, m_asks);
+    } else {
+        match_against(incoming, m_bids);
     }
-
-    // if (incoming.get_quantity() > 0) {
-    //     add_order(incoming);
-    // }
 }
 
-Order* OrderBook::best_bid() const {
+Order* OrderBook::best_bid() const noexcept {
     if (m_bids.empty()) return nullptr;
     return m_bids.begin()->second.best_order();
 }
 
-Order* OrderBook::best_ask() const {
+Order* OrderBook::best_ask() const noexcept {
     if (m_asks.empty()) return nullptr;
     return m_asks.begin()->second.best_order();
 }

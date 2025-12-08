@@ -15,6 +15,6 @@ void PriceLevel::remove_order(Order& order) {
     order.set_iterator_in_level(Order::LevelIterator{});
 }
 
-void PriceLevel::decrease_quantity(uint64_t qty) {
+void PriceLevel::decrease_quantity(uint64_t qty) noexcept {
     m_total_quantity = (qty >= m_total_quantity) ? 0 : (m_total_quantity - qty);
 }
