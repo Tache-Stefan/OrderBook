@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <unordered_map>
 #include <map>
 #include "Order.h"
@@ -9,11 +10,10 @@ class OrderBook {
 public:
     explicit OrderBook(double tick_size);
 
-    void submit_order(uint64_t order_id,
-                      double raw_price,
-                      uint64_t quantity,
-                      uint64_t timestamp,
-                      Side side);
+    uint64_t submit_order(double raw_price,
+                          uint64_t quantity,
+                          uint64_t timestamp,
+                          Side side);
 
     [[nodiscard]] bool cancel_order(uint64_t order_id);
     
@@ -21,11 +21,11 @@ public:
     [[nodiscard]] Order* best_ask() const noexcept;
 
 private:
-    double m_tick_size;
+    uint64_t m_next_order_id = 1;
+    double m_tick_size = 0.01;
     std::unordered_map<uint64_t, Order> m_owned_orders;
     std::map<uint64_t, PriceLevel, std::greater<>> m_bids;
     std::map<uint64_t, PriceLevel, std::less<>> m_asks;
-    std::map<uint64_t, Order*> m_orders;
 
     template<typename OppositeMap>
     void match_against(Order& incoming, OppositeMap& opposite);
@@ -52,11 +52,12 @@ void OrderBook::match_against(Order& incoming, OppositeMap& opposite) {
         level.decrease_quantity(trade_qty);
 
         if (best_opposite->get_quantity() == 0) {
+            uint64_t order_id_to_remove = best_opposite->get_order_id();
             level.remove_order(*best_opposite);
             if (level.empty()) {
                 opposite.erase(it_level);
             }
-            m_orders.erase(best_opposite->get_order_id());
+            m_owned_orders.erase(order_id_to_remove);
         }
     }
 }
