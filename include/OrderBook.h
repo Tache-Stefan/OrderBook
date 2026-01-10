@@ -16,6 +16,7 @@ public:
                           Side side);
 
     [[nodiscard]] bool cancel_order(uint64_t order_id);
+    [[nodiscard]] bool modify_order(uint64_t order_id, uint64_t new_quantity, uint64_t current_timestamp);
     
     [[nodiscard]] Order* best_bid() const noexcept;
     [[nodiscard]] Order* best_ask() const noexcept;

@@ -72,6 +72,49 @@ bool OrderBook::cancel_order(uint64_t order_id) {
     return true;
 }
 
+bool OrderBook::modify_order(uint64_t order_id, uint64_t new_quantity, uint64_t current_timestamp) {
+    if (new_quantity == 0) {
+        return cancel_order(order_id);
+    }
+
+    auto it = m_owned_orders.find(order_id);
+    if (it == m_owned_orders.end()) {
+        return false;
+    }
+
+    Order& order = it->second;
+
+    if (new_quantity > order.get_quantity()) {
+        // Cancel and resubmit (loses priority)
+        double raw_price = order.get_price() * m_tick_size;
+        Side side = order.get_side();
+
+        if (!cancel_order(order_id)) {
+            return false;
+        }
+        submit_order(raw_price, new_quantity, current_timestamp, side);
+    } else {
+        // Modify in place (keeps priority)
+        uint64_t diff = order.get_quantity() - new_quantity;
+        order.decrease_quantity(diff);
+
+        uint64_t price = order.get_price();
+        if (order.get_side() == Side::BID) {
+            auto it_level = m_bids.find(price);
+            if (it_level != m_bids.end()) {
+                it_level->second.decrease_quantity(diff);
+            }
+        } else {
+            auto it_level = m_asks.find(price);
+            if (it_level != m_asks.end()) {
+                it_level->second.decrease_quantity(diff);
+            }
+        }
+    }
+
+    return true;
+}
+
 void OrderBook::match_order(Order& incoming) {
     if (incoming.get_side() == Side::BID) {
         match_against(incoming, m_asks);
