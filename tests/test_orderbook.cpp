@@ -96,3 +96,50 @@ TEST_CASE("Modify order - ask side") {
     CHECK(ob.modify_order(order_id, 7, 2) == true);
     CHECK(ob.best_ask()->get_quantity() == 7);
 }
+
+TEST_CASE("Trade logging") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 10, 1, Side::ASK);  // order_id = 1
+    ob.submit_order(100.00, 7, 2, Side::BID);   // order_id = 2, matches
+
+    const auto& trades = ob.get_trades();
+    REQUIRE(trades.size() == 1);
+
+    CHECK(trades[0].trade_id == 1);
+    CHECK(trades[0].buyer_order_id == 2);   // BID is buyer
+    CHECK(trades[0].seller_order_id == 1);  // ASK is seller
+    CHECK(trades[0].price == 10000);
+    CHECK(trades[0].quantity == 7);
+}
+
+TEST_CASE("Trade callback") {
+    OrderBook ob(0.01);
+
+    std::vector<Trade> captured_trades;
+    ob.set_trade_callback([&](const Trade& trade) {
+        captured_trades.push_back(trade);
+    });
+
+    ob.submit_order(100.00, 10, 1, Side::ASK);
+    ob.submit_order(100.00, 15, 2, Side::BID);  // Fills 10, leaves 5
+
+    REQUIRE(captured_trades.size() == 1);
+    CHECK(captured_trades[0].quantity == 10);
+}
+
+TEST_CASE("Multiple trades") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 5, 1, Side::ASK);
+    ob.submit_order(101.00, 5, 2, Side::ASK);
+    ob.submit_order(102.00, 10, 3, Side::BID);  // Should match both asks
+
+    const auto& trades = ob.get_trades();
+    REQUIRE(trades.size() == 2);
+
+    CHECK(trades[0].price == 10000);  // First match at 100.00
+    CHECK(trades[0].quantity == 5);
+    CHECK(trades[1].price == 10100);  // Second match at 101.00
+    CHECK(trades[1].quantity == 5);
+}

@@ -132,3 +132,35 @@ Order* OrderBook::best_ask() const noexcept {
     if (m_asks.empty()) return nullptr;
     return m_asks.begin()->second.best_order();
 }
+
+void OrderBook::set_trade_callback(TradeCallback callback) {
+    m_trade_callback = std::move(callback);
+}
+
+const std::vector<Trade>& OrderBook::get_trades() const noexcept {
+    return m_trades;
+}
+
+void OrderBook::clear_trades() noexcept {
+    m_trades.clear();
+}
+
+void OrderBook::record_trade(uint64_t buyer_order_id,
+                             uint64_t seller_order_id,
+                             uint64_t price,
+                             uint64_t quantity,
+                             uint64_t timestamp) {
+    Trade trade{
+        m_next_trade_id++,
+        buyer_order_id,
+        seller_order_id,
+        price,
+        quantity,
+        timestamp
+    };
+    m_trades.push_back(trade);
+
+    if (m_trade_callback) {
+        m_trade_callback(trade);
+    }
+}
