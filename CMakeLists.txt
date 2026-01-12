@@ -37,6 +37,12 @@ add_executable(OrderBook src/main.cpp)
 target_link_libraries(OrderBook PRIVATE orderbook_lib)
 
 # ------------
+# Benchmarks
+# ------------
+add_executable(OrderBookBenchmark benchmarks/benchmark_orderbook.cpp)
+target_link_libraries(OrderBookBenchmark PRIVATE -O3 -march=native orderbook_lib)
+
+# ------------
 # Tests
 # ------------
 add_executable(OrderBookTests tests/test_orderbook.cpp)
