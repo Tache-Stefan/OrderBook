@@ -5,26 +5,89 @@
 OrderBook::OrderBook(double tick_size)
     : m_tick_size(tick_size) {}
 
+uint64_t OrderBook::normalize_price(double raw_price) const noexcept {
+    return static_cast<uint64_t>(std::round(raw_price / m_tick_size));
+}
+
+bool OrderBook::can_fill_entirely(uint64_t price, uint64_t quantity, Side side) const {
+    uint64_t available = 0;
+
+    if (side == Side::BID) {
+        for (const auto& [level_price, level] : m_asks) {
+            if (level_price > price) break;
+            available += level.empty() ? 0 : level.best_order()->get_quantity();
+            if (available >= quantity) return true;
+        }
+    } else {
+        for (const auto& [level_price, level] : m_bids) {
+            if (level_price < price) break;
+            available += level.empty() ? 0 : level.best_order()->get_quantity();
+            if (available >= quantity) return true;
+        }
+    }
+
+    return available >= quantity;
+}
+
 uint64_t OrderBook::submit_order(double raw_price,
                                  uint64_t quantity,
                                  uint64_t timestamp,
-                                 Side side) {
-    const uint64_t order_id = m_next_order_id++;
-    const double ticks = raw_price / m_tick_size;
-    assert(std::fabs(ticks - std::round(ticks)) < 1e-9 && "Price is not aligned to tick size");
-    
-    const uint64_t price_in_ticks = static_cast<uint64_t>(std::llround(ticks));
+                                 Side side,
+                                 OrderType type) {
 
-    auto [it, inserted] = m_owned_orders.emplace(order_id,
-                          Order(order_id, price_in_ticks, quantity, timestamp, side));
-    
+    if (quantity == 0) {
+        return 0;
+    }
+
+    uint64_t price = normalize_price(raw_price);
+    uint64_t order_id = m_next_order_id++;
+
+    if (type == OrderType::FOK) {
+        if (!can_fill_entirely(price, quantity, side)) {
+            return 0;
+        }
+    }
+
+    auto [it, inserted] = m_owned_orders.emplace(
+        std::piecewise_construct,
+        std::forward_as_tuple(order_id),
+        std::forward_as_tuple(order_id, price, quantity, timestamp, side)
+    );
     Order& order = it->second;
+
     match_order(order);
-    
+
     if (order.get_quantity() > 0) {
-        add_order(order);
+        switch (type) {
+            case OrderType::LIMIT:
+                add_order(order);
+                break;
+            case OrderType::MARKET:
+            case OrderType::IOC:
+            case OrderType::FOK:
+                m_owned_orders.erase(order_id);
+                break;
+        }
+    }
+
+    return order_id;
+}
+
+uint64_t OrderBook::submit_market_order(uint64_t quantity,
+                                        uint64_t timestamp,
+                                        Side side) {
+    if (quantity == 0) {
+        return 0;
+    }
+
+    uint64_t order_id = m_next_order_id++;
+    uint64_t price = (side == Side::BID) ? std::numeric_limits<uint64_t>::max() : 0;
+
+    Order order(order_id, price, quantity, timestamp, side);
+    if (side == Side::BID) {
+        match_against_market(order, m_asks);
     } else {
-        m_owned_orders.erase(it);
+        match_against_market(order, m_bids);
     }
 
     return order_id;
@@ -48,13 +111,12 @@ bool OrderBook::cancel_order(uint64_t order_id) {
 
     Order& order = it_order->second;
     uint64_t price = order.get_price();
-    Side side = order.get_side();
 
-    if (side == Side::BID) {
+    if (order.get_side() == Side::BID) {
         auto it_level = m_bids.find(price);
         if (it_level != m_bids.end()) {
             it_level->second.remove_order(order);
-            if (it_level->second.best_order() == nullptr) {
+            if (it_level->second.empty()) {
                 m_bids.erase(it_level);
             }
         }
@@ -62,7 +124,7 @@ bool OrderBook::cancel_order(uint64_t order_id) {
         auto it_level = m_asks.find(price);
         if (it_level != m_asks.end()) {
             it_level->second.remove_order(order);
-            if (it_level->second.best_order() == nullptr) {
+            if (it_level->second.empty()) {
                 m_asks.erase(it_level);
             }
         }

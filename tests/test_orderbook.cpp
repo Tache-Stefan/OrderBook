@@ -143,3 +143,186 @@ TEST_CASE("Multiple trades") {
     CHECK(trades[1].price == 10100);  // Second match at 101.00
     CHECK(trades[1].quantity == 5);
 }
+
+TEST_CASE("IOC order - full fill") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 50, 1, Side::ASK);
+    uint64_t id = ob.submit_order(100.00, 50, 2, Side::BID, OrderType::IOC);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 1);
+    CHECK(ob.get_trades()[0].quantity == 50);
+    CHECK(ob.best_ask() == nullptr);
+    CHECK(ob.best_bid() == nullptr);
+}
+
+TEST_CASE("IOC order - partial fill") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 30, 1, Side::ASK);
+    uint64_t id = ob.submit_order(100.00, 50, 2, Side::BID, OrderType::IOC);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 1);
+    CHECK(ob.get_trades()[0].quantity == 30);
+    CHECK(ob.best_ask() == nullptr);
+    CHECK(ob.best_bid() == nullptr);
+}
+
+TEST_CASE("IOC order - no match") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(101.00, 50, 1, Side::ASK);
+    uint64_t id = ob.submit_order(100.00, 50, 2, Side::BID, OrderType::IOC);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().empty());
+    CHECK(ob.best_bid() == nullptr);
+    CHECK(ob.best_ask() != nullptr);
+    CHECK(ob.best_ask()->get_quantity() == 50);
+}
+
+TEST_CASE("IOC order - sell side") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 30, 1, Side::BID);
+    uint64_t id = ob.submit_order(100.00, 50, 2, Side::ASK, OrderType::IOC);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 1);
+    CHECK(ob.get_trades()[0].quantity == 30);
+    CHECK(ob.best_bid() == nullptr);
+    CHECK(ob.best_ask() == nullptr);
+}
+
+TEST_CASE("IOC order - sweeps multiple levels") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 20, 1, Side::ASK);
+    ob.submit_order(100.01, 20, 2, Side::ASK);
+    ob.submit_order(100.02, 20, 3, Side::ASK);
+
+    uint64_t id = ob.submit_order(100.02, 50, 4, Side::BID, OrderType::IOC);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 3);
+    CHECK(ob.best_ask()->get_price() == 10002);
+    CHECK(ob.best_ask()->get_quantity() == 10);
+}
+
+TEST_CASE("FOK order - full fill possible") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 50, 1, Side::ASK);
+    uint64_t id = ob.submit_order(100.00, 50, 2, Side::BID, OrderType::FOK);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 1);
+    CHECK(ob.get_trades()[0].quantity == 50);
+    CHECK(ob.best_ask() == nullptr);
+}
+
+TEST_CASE("FOK order - full fill not possible") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 30, 1, Side::ASK);
+    uint64_t id = ob.submit_order(100.00, 50, 2, Side::BID, OrderType::FOK);
+
+    CHECK(id == 0);
+    CHECK(ob.get_trades().empty());
+    CHECK(ob.best_ask() != nullptr);
+    CHECK(ob.best_ask()->get_quantity() == 30);
+}
+
+TEST_CASE("FOK order - price too aggressive") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 50, 1, Side::ASK);
+    uint64_t id = ob.submit_order(99.00, 50, 2, Side::BID, OrderType::FOK);
+
+    CHECK(id == 0);
+    CHECK(ob.get_trades().empty());
+    CHECK(ob.best_ask() != nullptr);
+    CHECK(ob.best_ask()->get_quantity() == 50);
+}
+
+TEST_CASE("FOK order - fills multiple levels") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 20, 1, Side::ASK);
+    ob.submit_order(100.01, 20, 2, Side::ASK);
+    ob.submit_order(100.02, 20, 3, Side::ASK);
+
+    uint64_t id = ob.submit_order(100.02, 50, 4, Side::BID, OrderType::FOK);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 3);
+    CHECK(ob.best_ask()->get_price() == 10002);
+    CHECK(ob.best_ask()->get_quantity() == 10);
+}
+
+TEST_CASE("FOK order - sell side") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 30, 1, Side::BID);
+    ob.submit_order(99.99, 30, 2, Side::BID);
+    uint64_t id = ob.submit_order(99.99, 50, 3, Side::ASK, OrderType::FOK);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 2);
+}
+
+TEST_CASE("Market order - buy sweeps multiple levels") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 20, 1, Side::ASK);
+    ob.submit_order(100.01, 20, 2, Side::ASK);
+    ob.submit_order(100.02, 20, 3, Side::ASK);
+
+    uint64_t id = ob.submit_market_order(50, 4, Side::BID);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 3);
+    CHECK(ob.best_ask()->get_price() == 10002);
+    CHECK(ob.best_ask()->get_quantity() == 10);
+}
+
+TEST_CASE("Market order - sell sweeps multiple levels") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 20, 1, Side::BID);
+    ob.submit_order(99.99, 20, 2, Side::BID);
+    ob.submit_order(99.98, 20, 3, Side::BID);
+
+    uint64_t id = ob.submit_market_order(50, 4, Side::ASK);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 3);
+    CHECK(ob.best_bid()->get_price() == 9998);
+    CHECK(ob.best_bid()->get_quantity() == 10);
+}
+
+TEST_CASE("Market order - partial fill") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 20, 1, Side::ASK);
+
+    uint64_t id = ob.submit_market_order(50, 2, Side::BID);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().size() == 1);
+    CHECK(ob.get_trades()[0].quantity == 20);
+    CHECK(ob.best_ask() == nullptr);
+    CHECK(ob.best_bid() == nullptr);
+}
+
+TEST_CASE("Market order - empty book") {
+    OrderBook ob(0.01);
+
+    uint64_t id = ob.submit_market_order(50, 1, Side::BID);
+
+    CHECK(id != 0);
+    CHECK(ob.get_trades().empty());
+    CHECK(ob.best_bid() == nullptr);
+}

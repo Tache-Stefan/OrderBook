@@ -8,6 +8,13 @@ enum class Side {
     ASK
 };
 
+enum class OrderType {
+    LIMIT,
+    MARKET,
+    IOC, // Immediate Or Cancel
+    FOK // Fill Or Kill
+};
+
 class Order {
 public:
     using LevelIterator = std::list<Order*>::iterator;
