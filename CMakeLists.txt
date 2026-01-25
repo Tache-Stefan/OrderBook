@@ -40,7 +40,13 @@ target_link_libraries(OrderBook PRIVATE orderbook_lib)
 # Benchmarks
 # ------------
 add_executable(OrderBookBenchmark benchmarks/benchmark_orderbook.cpp)
-target_link_libraries(OrderBookBenchmark PRIVATE -O3 -march=native orderbook_lib)
+target_link_libraries(OrderBookBenchmark PRIVATE orderbook_lib)
+
+if(MSVC)
+    target_compile_options(orderbook_lib PRIVATE /O2)
+else()
+    target_compile_options(orderbook_lib PRIVATE -O3 -march=native)
+endif()
 
 # ------------
 # Tests

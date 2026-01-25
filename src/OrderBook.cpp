@@ -226,3 +226,64 @@ void OrderBook::record_trade(uint64_t buyer_order_id,
         m_trade_callback(trade);
     }
 }
+
+std::vector<DepthLevel> OrderBook::get_depth(Side side, size_t max_levels) const {
+    std::vector<DepthLevel> depth;
+    depth.reserve(max_levels);
+
+    if (side == Side::BID) {
+        for (const auto& [price_ticks, level] : m_bids) {
+            if (depth.size() >= max_levels) break;
+            depth.push_back({
+                static_cast<double>(price_ticks) * m_tick_size,
+                level.get_total_quantity(),
+                level.get_order_count()
+            });
+        }
+    } else {
+        for (const auto& [price_ticks, level] : m_asks) {
+            if (depth.size() >= max_levels) break;
+            depth.push_back({
+                static_cast<double>(price_ticks) * m_tick_size,
+                level.get_total_quantity(),
+                level.get_order_count()
+            });
+        }
+    }
+
+    return depth;
+}
+
+double OrderBook::get_spread() const {
+    if (m_bids.empty() || m_asks.empty()) {
+        return 0.0;
+    }
+
+    uint64_t best_bid_ticks = m_bids.begin()->first;
+    uint64_t best_ask_ticks = m_asks.begin()->first;
+
+    return static_cast<double>(best_ask_ticks - best_bid_ticks) * m_tick_size;
+}
+
+double OrderBook::get_mid_price() const {
+    if (m_bids.empty() || m_asks.empty()) {
+        return 0.0;
+    }
+
+    uint64_t best_bid_ticks = m_bids.begin()->first;
+    uint64_t best_ask_ticks = m_asks.begin()->first;
+
+    return static_cast<double>(best_bid_ticks + best_ask_ticks) * m_tick_size / 2.0;
+}
+
+size_t OrderBook::get_order_count() const noexcept {
+    return m_owned_orders.size();
+}
+
+size_t OrderBook::get_bid_levels() const noexcept {
+    return m_bids.size();
+}
+
+size_t OrderBook::get_ask_levels() const noexcept {
+    return m_asks.size();
+}

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "OrderBook.h"
 
 TEST_CASE("Basic add and best bid / ask") {
@@ -144,6 +145,8 @@ TEST_CASE("Multiple trades") {
     CHECK(trades[1].quantity == 5);
 }
 
+// ==================== Immediate Or Cancel (IOC) Tests =================
+
 TEST_CASE("IOC order - full fill") {
     OrderBook ob(0.01);
 
@@ -211,6 +214,8 @@ TEST_CASE("IOC order - sweeps multiple levels") {
     CHECK(ob.best_ask()->get_quantity() == 10);
 }
 
+// ==================== Fill Or Kill (FOK) Tests =================
+
 TEST_CASE("FOK order - full fill possible") {
     OrderBook ob(0.01);
 
@@ -273,6 +278,8 @@ TEST_CASE("FOK order - sell side") {
     CHECK(ob.get_trades().size() == 2);
 }
 
+// =================== Market Order Tests =================
+
 TEST_CASE("Market order - buy sweeps multiple levels") {
     OrderBook ob(0.01);
 
@@ -325,4 +332,165 @@ TEST_CASE("Market order - empty book") {
     CHECK(id != 0);
     CHECK(ob.get_trades().empty());
     CHECK(ob.best_bid() == nullptr);
+}
+
+// =================== Depth & Statistics Tests =================
+
+TEST_CASE("Get depth - bids") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 50, 1, Side::BID);
+    ob.submit_order(100.00, 30, 2, Side::BID);
+    ob.submit_order(99.99, 100, 3, Side::BID);
+    ob.submit_order(99.98, 200, 4, Side::BID);
+
+    auto depth = ob.get_depth(Side::BID, 10);
+
+    REQUIRE(depth.size() == 3);
+    
+    CHECK(depth[0].price == Catch::Approx(100.00));
+    CHECK(depth[0].quantity == 80);
+    CHECK(depth[0].order_count == 2);
+    
+    CHECK(depth[1].price == Catch::Approx(99.99));
+    CHECK(depth[1].quantity == 100);
+    CHECK(depth[1].order_count == 1);
+    
+    CHECK(depth[2].price == Catch::Approx(99.98));
+    CHECK(depth[2].quantity == 200);
+    CHECK(depth[2].order_count == 1);
+}
+
+TEST_CASE("Get depth - asks") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.01, 50, 1, Side::ASK);
+    ob.submit_order(100.01, 25, 2, Side::ASK);
+    ob.submit_order(100.02, 100, 3, Side::ASK);
+
+    auto depth = ob.get_depth(Side::ASK, 10);
+
+    REQUIRE(depth.size() == 2);
+    
+    CHECK(depth[0].price == Catch::Approx(100.01));
+    CHECK(depth[0].quantity == 75);
+    CHECK(depth[0].order_count == 2);
+    
+    CHECK(depth[1].price == Catch::Approx(100.02));
+    CHECK(depth[1].quantity == 100);
+}
+
+TEST_CASE("Get depth - max levels limit") {
+    OrderBook ob(0.01);
+
+    for (int i = 0; i < 10; ++i) {
+        ob.submit_order(100.00 + i * 0.01, 10, i, Side::ASK);
+    }
+
+    auto depth = ob.get_depth(Side::ASK, 3);
+    CHECK(depth.size() == 3);
+
+    auto full_depth = ob.get_depth(Side::ASK, 100);
+    CHECK(full_depth.size() == 10);
+}
+
+TEST_CASE("Get depth - empty book") {
+    OrderBook ob(0.01);
+
+    auto bid_depth = ob.get_depth(Side::BID, 10);
+    auto ask_depth = ob.get_depth(Side::ASK, 10);
+
+    CHECK(bid_depth.empty());
+    CHECK(ask_depth.empty());
+}
+
+TEST_CASE("Get spread") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 10, 1, Side::BID);
+    ob.submit_order(100.05, 10, 2, Side::ASK);
+
+    CHECK(ob.get_spread() == Catch::Approx(0.05));
+}
+
+TEST_CASE("Get spread - empty book") {
+    OrderBook ob(0.01);
+
+    CHECK(ob.get_spread() == 0.0);
+
+    ob.submit_order(100.00, 10, 1, Side::BID);
+    CHECK(ob.get_spread() == 0.0);
+}
+
+TEST_CASE("Get mid price") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 10, 1, Side::BID);
+    ob.submit_order(100.10, 10, 2, Side::ASK);
+
+    CHECK(ob.get_mid_price() == Catch::Approx(100.05));
+}
+
+TEST_CASE("Get mid price - empty book") {
+    OrderBook ob(0.01);
+
+    CHECK(ob.get_mid_price() == 0.0);
+}
+
+TEST_CASE("Get order count") {
+    OrderBook ob(0.01);
+
+    CHECK(ob.get_order_count() == 0);
+
+    ob.submit_order(100.00, 10, 1, Side::BID);
+    CHECK(ob.get_order_count() == 1);
+
+    ob.submit_order(100.00, 10, 2, Side::BID);
+    CHECK(ob.get_order_count() == 2);
+
+    ob.submit_order(101.00, 10, 3, Side::ASK);
+    CHECK(ob.get_order_count() == 3);
+}
+
+TEST_CASE("Get bid/ask levels count") {
+    OrderBook ob(0.01);
+
+    CHECK(ob.get_bid_levels() == 0);
+    CHECK(ob.get_ask_levels() == 0);
+
+    ob.submit_order(100.00, 10, 1, Side::BID);
+    ob.submit_order(100.00, 10, 2, Side::BID);
+    ob.submit_order(99.99, 10, 3, Side::BID);
+
+    CHECK(ob.get_bid_levels() == 2);
+
+    ob.submit_order(100.01, 10, 4, Side::ASK);
+    CHECK(ob.get_ask_levels() == 1);
+}
+
+TEST_CASE("Depth updates after trades") {
+    OrderBook ob(0.01);
+
+    ob.submit_order(100.00, 100, 1, Side::ASK);
+    ob.submit_order(100.00, 30, 2, Side::BID);
+
+    auto depth = ob.get_depth(Side::ASK, 10);
+    CHECK(depth.size() == 1);
+    CHECK(depth[0].quantity == 70);
+}
+
+TEST_CASE("Depth updates after cancel") {
+    OrderBook ob(0.01);
+
+    uint64_t id1 = ob.submit_order(100.00, 50, 1, Side::BID);
+    uint64_t id2 = ob.submit_order(100.00, 30, 2, Side::BID);
+
+    auto depth = ob.get_depth(Side::BID, 10);
+    CHECK(depth[0].quantity == 80);
+
+    CHECK(ob.cancel_order(id1) == true);
+
+    depth = ob.get_depth(Side::BID, 10);
+    CHECK(depth[0].quantity == 30);
+    CHECK(depth[0].order_count == 1);
 }

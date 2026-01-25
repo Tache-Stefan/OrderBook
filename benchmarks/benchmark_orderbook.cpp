@@ -258,6 +258,55 @@ int main() {
         results.push_back(result);
     }
 
+    print_section("Depth Queries");
+
+    {
+        OrderBook ob(0.01);
+        for (size_t i = 0; i < 1000; ++i) {
+            ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
+        }
+        
+        auto result = benchmark("get_depth(BID, 5)", ITERATIONS, WARMUP,
+            []() {},
+            [&](size_t) {
+                volatile auto depth = ob.get_depth(Side::BID, 5);
+                (void)depth;
+            });
+        print_result(result);
+        results.push_back(result);
+    }
+
+    {
+        OrderBook ob(0.01);
+        for (size_t i = 0; i < 1000; ++i) {
+            ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
+        }
+        
+        auto result = benchmark("get_spread()", ITERATIONS, WARMUP,
+            []() {},
+            [&](size_t) {
+                volatile auto spread = ob.get_spread();
+                (void)spread;
+            });
+        print_result(result);
+        results.push_back(result);
+    }
+
+    {
+        OrderBook ob(0.01);
+        ob.submit_order(100.0, 10, 1, Side::BID);
+        ob.submit_order(100.01, 10, 2, Side::ASK);
+        
+        auto result = benchmark("get_mid_price()", ITERATIONS, WARMUP,
+            []() {},
+            [&](size_t) {
+                volatile auto mid = ob.get_mid_price();
+                (void)mid;
+            });
+        print_result(result);
+        results.push_back(result);
+    }
+
     print_section("Throughput");
 
     {

@@ -9,6 +9,12 @@
 #include "PriceLevel.h"
 #include "Trade.h"
 
+struct DepthLevel {
+    double price;
+    uint64_t quantity;
+    size_t order_count;
+};
+
 class OrderBook {
 public:
     using TradeCallback = std::function<void(const Trade&)>;
@@ -30,6 +36,13 @@ public:
     
     [[nodiscard]] Order* best_bid() const noexcept;
     [[nodiscard]] Order* best_ask() const noexcept;
+
+    [[nodiscard]] std::vector<DepthLevel> get_depth(Side side, size_t max_levels = 10) const;
+    [[nodiscard]] double get_spread() const;
+    [[nodiscard]] double get_mid_price() const;
+    [[nodiscard]] size_t get_order_count() const noexcept;
+    [[nodiscard]] size_t get_bid_levels() const noexcept;
+    [[nodiscard]] size_t get_ask_levels() const noexcept;
 
     void set_trade_callback(TradeCallback callback);
     [[nodiscard]] const std::vector<Trade>& get_trades() const noexcept;
