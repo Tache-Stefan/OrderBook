@@ -86,6 +86,7 @@ int main() {
 
     {
         OrderBook ob(0.01);
+        ob.reserve_orders(ITERATIONS + WARMUP);
         uint64_t ts = 0;
         auto result = benchmark("submit_order (no match, building depth)", ITERATIONS, WARMUP,
             [&]() { ts = 0; },
@@ -99,6 +100,7 @@ int main() {
 
     {
         OrderBook ob(0.01);
+        ob.reserve_orders(ITERATIONS + WARMUP);
         uint64_t ts = 0;
         auto result = benchmark("submit_order (no match, same level)", ITERATIONS, WARMUP,
             [&]() { ts = 0; },
@@ -120,6 +122,7 @@ int main() {
         auto result = benchmark("submit_order (immediate full match)", ITERATIONS, WARMUP,
             [&]() {
                 ob_ptr = std::make_unique<OrderBook>(0.01);
+                ob_ptr->reserve_orders(TOTAL_OPS);
                 ts = 0;
                 ask_prices.clear();
 
@@ -145,6 +148,7 @@ int main() {
         auto result = benchmark("submit_order (partial match)", ITERATIONS, WARMUP,
             [&]() {
                 ob_ptr = std::make_unique<OrderBook>(0.01);
+                ob_ptr->reserve_orders(TOTAL_OPS);
                 ts = 0;
                 ob_ptr->submit_order(100.0, static_cast<uint64_t>(TOTAL_OPS) * 10, ts++, Side::ASK);
             },
@@ -165,6 +169,7 @@ int main() {
         auto result = benchmark("cancel_order (multiple levels)", ITERATIONS, WARMUP,
             [&]() {
                 ob_ptr = std::make_unique<OrderBook>(0.01);
+                ob_ptr->reserve_orders(TOTAL_OPS);
                 order_ids.clear();
                 order_ids.reserve(TOTAL_OPS);
                 for (size_t i = 0; i < TOTAL_OPS; ++i) {
@@ -187,6 +192,7 @@ int main() {
         auto result = benchmark("cancel_order (single level)", ITERATIONS, WARMUP,
             [&]() {
                 ob_ptr = std::make_unique<OrderBook>(0.01);
+                ob_ptr->reserve_orders(TOTAL_OPS);
                 order_ids.clear();
                 order_ids.reserve(TOTAL_OPS);
                 for (size_t i = 0; i < TOTAL_OPS; ++i) {
@@ -210,6 +216,7 @@ int main() {
         auto result = benchmark("modify_order (decrease qty)", ITERATIONS, WARMUP,
             [&]() {
                 ob_ptr = std::make_unique<OrderBook>(0.01);
+                ob_ptr->reserve_orders(TOTAL_OPS);
                 order_ids.clear();
                 order_ids.reserve(TOTAL_OPS);
                 for (size_t i = 0; i < TOTAL_OPS; ++i) {
@@ -228,6 +235,7 @@ int main() {
 
     {
         OrderBook ob(0.01);
+        ob.reserve_orders(1000);
         for (size_t i = 0; i < 1000; ++i) {
             ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
         }
@@ -244,6 +252,7 @@ int main() {
 
     {
         OrderBook ob(0.01);
+        ob.reserve_orders(1000);
         for (size_t i = 0; i < 1000; ++i) {
             ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::ASK);
         }
@@ -262,6 +271,7 @@ int main() {
 
     {
         OrderBook ob(0.01);
+        ob.reserve_orders(1000);
         for (size_t i = 0; i < 1000; ++i) {
             ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
         }
@@ -278,6 +288,7 @@ int main() {
 
     {
         OrderBook ob(0.01);
+        ob.reserve_orders(1000);
         for (size_t i = 0; i < 1000; ++i) {
             ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
         }
@@ -312,6 +323,7 @@ int main() {
     {
         OrderBook ob(0.01);
         constexpr size_t OPS = 1000000;
+        ob.reserve_orders(OPS);
         
         auto start = std::chrono::high_resolution_clock::now();
         

@@ -8,6 +8,7 @@
 #include "Order.h"
 #include "PriceLevel.h"
 #include "Trade.h"
+#include "MemoryPool.h"
 
 struct DepthLevel {
     double price;
@@ -20,6 +21,14 @@ public:
     using TradeCallback = std::function<void(const Trade&)>;
 
     explicit OrderBook(double tick_size);
+    ~OrderBook();
+
+    // Owns memory pool, non-copyable
+    OrderBook(const OrderBook&) = delete;
+    OrderBook& operator=(const OrderBook&) = delete;
+
+    OrderBook(OrderBook&&) = default;
+    OrderBook& operator=(OrderBook&&) = default;
 
     uint64_t submit_order(double raw_price,
                           uint64_t quantity,
@@ -48,11 +57,16 @@ public:
     [[nodiscard]] const std::vector<Trade>& get_trades() const noexcept;
     void clear_trades() noexcept;
 
+    void reserve_orders(const size_t count);
+
 private:
     uint64_t m_next_order_id = 1;
     uint64_t m_next_trade_id = 1;
     double m_tick_size = 0.01;
-    std::unordered_map<uint64_t, Order> m_owned_orders;
+
+    MemoryPool<Order> m_order_pool;
+    std::unordered_map<uint64_t, Order*> m_orders; // order_id -> Order*
+
     std::map<uint64_t, PriceLevel, std::greater<>> m_bids;
     std::map<uint64_t, PriceLevel, std::less<>> m_asks;
 
@@ -105,7 +119,11 @@ void OrderBook::match_against(Order& incoming, OppositeMap& opposite) {
             if (level.empty()) {
                 opposite.erase(it_level);
             }
-            m_owned_orders.erase(order_id_to_remove);
+            auto order_it = m_orders.find(order_id_to_remove);
+            if (order_it != m_orders.end()) {
+                m_order_pool.destroy(order_it->second);
+                m_orders.erase(order_it);
+            }
         }
     }
 }
@@ -134,7 +152,11 @@ void OrderBook::match_against_market(Order& incoming, OppositeMap& opposite) {
             if (level.empty()) {
                 opposite.erase(it_level);
             }
-            m_owned_orders.erase(order_id_to_remove);
+            auto order_it = m_orders.find(order_id_to_remove);
+            if (order_it != m_orders.end()) {
+                m_order_pool.destroy(order_it->second);
+                m_orders.erase(order_it);
+            }
         }
     }
 }

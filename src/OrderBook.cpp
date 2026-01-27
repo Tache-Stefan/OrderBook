@@ -5,6 +5,12 @@
 OrderBook::OrderBook(double tick_size)
     : m_tick_size(tick_size) {}
 
+OrderBook::~OrderBook() {
+    for (auto& [order_id, order_ptr] : m_orders) {
+        m_order_pool.destroy(order_ptr);
+    }
+}
+
 uint64_t OrderBook::normalize_price(double raw_price) const noexcept {
     return static_cast<uint64_t>(std::round(raw_price / m_tick_size));
 }
@@ -48,26 +54,23 @@ uint64_t OrderBook::submit_order(double raw_price,
         }
     }
 
-    auto [it, inserted] = m_owned_orders.emplace(
-        std::piecewise_construct,
-        std::forward_as_tuple(order_id),
-        std::forward_as_tuple(order_id, price, quantity, timestamp, side)
-    );
-    Order& order = it->second;
+    Order* order = m_order_pool.construct(order_id, price, quantity, timestamp, side);
+    match_order(*order);
 
-    match_order(order);
-
-    if (order.get_quantity() > 0) {
+    if (order->get_quantity() > 0) {
         switch (type) {
             case OrderType::LIMIT:
-                add_order(order);
+                m_orders[order_id] = order;
+                add_order(*order);
                 break;
             case OrderType::MARKET:
             case OrderType::IOC:
             case OrderType::FOK:
-                m_owned_orders.erase(order_id);
+                m_order_pool.destroy(order);
                 break;
         }
+    } else {
+        m_order_pool.destroy(order);
     }
 
     return order_id;
@@ -83,12 +86,15 @@ uint64_t OrderBook::submit_market_order(uint64_t quantity,
     uint64_t order_id = m_next_order_id++;
     uint64_t price = (side == Side::BID) ? std::numeric_limits<uint64_t>::max() : 0;
 
-    Order order(order_id, price, quantity, timestamp, side);
+    Order* order = m_order_pool.construct(order_id, price, quantity, timestamp, side);
+
     if (side == Side::BID) {
-        match_against_market(order, m_asks);
+        match_against_market(*order, m_asks);
     } else {
-        match_against_market(order, m_bids);
+        match_against_market(*order, m_bids);
     }
+
+    m_order_pool.destroy(order);
 
     return order_id;
 }
@@ -106,10 +112,10 @@ void OrderBook::add_order(Order& order) {
 }
 
 bool OrderBook::cancel_order(uint64_t order_id) {
-    auto it_order = m_owned_orders.find(order_id);
-    if (it_order == m_owned_orders.end()) return false;
+    auto it_order = m_orders.find(order_id);
+    if (it_order == m_orders.end()) return false;
 
-    Order& order = it_order->second;
+    Order& order = *it_order->second;
     uint64_t price = order.get_price();
 
     if (order.get_side() == Side::BID) {
@@ -130,7 +136,8 @@ bool OrderBook::cancel_order(uint64_t order_id) {
         }
     }
 
-    m_owned_orders.erase(it_order);
+    m_order_pool.destroy(it_order->second);
+    m_orders.erase(it_order);
     return true;
 }
 
@@ -139,12 +146,12 @@ bool OrderBook::modify_order(uint64_t order_id, uint64_t new_quantity, uint64_t 
         return cancel_order(order_id);
     }
 
-    auto it = m_owned_orders.find(order_id);
-    if (it == m_owned_orders.end()) {
+    auto it = m_orders.find(order_id);
+    if (it == m_orders.end()) {
         return false;
     }
 
-    Order& order = it->second;
+    Order& order = *it->second;
 
     if (new_quantity > order.get_quantity()) {
         // Cancel and resubmit (loses priority)
@@ -277,7 +284,7 @@ double OrderBook::get_mid_price() const {
 }
 
 size_t OrderBook::get_order_count() const noexcept {
-    return m_owned_orders.size();
+    return m_orders.size();
 }
 
 size_t OrderBook::get_bid_levels() const noexcept {
@@ -286,4 +293,9 @@ size_t OrderBook::get_bid_levels() const noexcept {
 
 size_t OrderBook::get_ask_levels() const noexcept {
     return m_asks.size();
+}
+
+void OrderBook::reserve_orders(const size_t count) {
+    m_order_pool.reserve(count);
+    m_orders.reserve(count);
 }
