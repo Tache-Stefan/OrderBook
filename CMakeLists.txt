@@ -13,6 +13,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(catch2)
 
+FetchContent_Declare(
+  googlebenchmark
+  GIT_REPOSITORY https://github.com/google/benchmark.git
+  GIT_TAG v1.9.5
+)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googlebenchmark)
+
 # ------------
 # Library
 # ------------
@@ -40,7 +49,7 @@ target_link_libraries(OrderBook PRIVATE orderbook_lib)
 # Benchmarks
 # ------------
 add_executable(OrderBookBenchmark benchmarks/benchmark_orderbook.cpp)
-target_link_libraries(OrderBookBenchmark PRIVATE orderbook_lib)
+target_link_libraries(OrderBookBenchmark PRIVATE orderbook_lib benchmark::benchmark)
 
 if(MSVC)
     target_compile_options(orderbook_lib PRIVATE /O2)

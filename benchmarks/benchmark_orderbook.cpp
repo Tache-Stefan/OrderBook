@@ -1,362 +1,347 @@
 #include "OrderBook.h"
-#include <chrono>
-#include <vector>
-#include <algorithm>
-#include <iostream>
-#include <iomanip>
-#include <random>
-#include <string>
+#include <benchmark/benchmark.h>
+
+#include <cstdint>
 #include <memory>
+#include <vector>
 
-struct BenchmarkResult {
-    std::string name;
-    double avg_ns;
-    double p50_ns;
-    double p99_ns;
-    double p999_ns;
-    size_t iterations;
-};
+namespace {
+constexpr double kTickSize = 0.01;
+constexpr uint64_t kQty = 10;
 
-template<typename SetupFunc, typename Func>
-BenchmarkResult benchmark(const std::string& name, size_t iterations, size_t warmup_iterations, SetupFunc&& setup, Func&& func) {
-    setup();
-    
-    std::vector<int64_t> latencies;
-    latencies.reserve(iterations);
+void preload_asks_increasing(OrderBook& ob, std::vector<double>& ask_prices, size_t count, uint64_t& ts) {
+    ask_prices.clear();
+    ask_prices.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const double price = 100.0 + static_cast<double>(i) * 0.01;
+        ask_prices.push_back(price);
+        ob.submit_order(price, kQty, ts++, Side::ASK);
+    }
+}
 
-    // Warmup
-    for (size_t i = 0; i < warmup_iterations; ++i) {
-        func(i);
+void preload_bids_multiple_levels(OrderBook& ob, std::vector<uint64_t>& ids, size_t count) {
+    ids.clear();
+    ids.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const double price = 100.0 + static_cast<double>(i % 1000) * 0.01;
+        ids.push_back(ob.submit_order(price, kQty, static_cast<uint64_t>(i), Side::BID));
+    }
+}
+
+void preload_bids_single_level(OrderBook& ob, std::vector<uint64_t>& ids, size_t count) {
+    ids.clear();
+    ids.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        ids.push_back(ob.submit_order(100.0, kQty, static_cast<uint64_t>(i), Side::BID));
+    }
+}
+
+void preload_bids_for_modify(OrderBook& ob, std::vector<uint64_t>& ids, size_t count) {
+    ids.clear();
+    ids.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const double price = 100.0 + static_cast<double>(i % 1000) * 0.01;
+        ids.push_back(ob.submit_order(price, 100, static_cast<uint64_t>(i), Side::BID));
+    }
+}
+
+// submit_order (no match, building depth)
+static void BM_SubmitNoMatchBuildingDepth(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(static_cast<size_t>(state.range(0)) * 2);
+    uint64_t ts = 0;
+
+    for (auto _ : state) {
+        const double price = 50.0 + static_cast<double>(ts % 1000) * 0.01;
+        benchmark::DoNotOptimize(ob.submit_order(price, kQty, ts++, Side::BID));
     }
 
-    // Actual benchmark
-    for (size_t i = 0; i < iterations; ++i) {
-        auto start = std::chrono::high_resolution_clock::now();
-        func(warmup_iterations + i);
-        auto end = std::chrono::high_resolution_clock::now();
-        latencies.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_SubmitNoMatchBuildingDepth)->Arg(100000)->Unit(benchmark::kNanosecond);
+
+// submit_order (no match, same level)
+static void BM_SubmitNoMatchSameLevel(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(static_cast<size_t>(state.range(0)) * 2);
+    uint64_t ts = 0;
+
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(ob.submit_order(100.0, kQty, ts++, Side::BID));
     }
 
-    std::sort(latencies.begin(), latencies.end());
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_SubmitNoMatchSameLevel)->Arg(100000)->Unit(benchmark::kNanosecond);
 
-    double sum = 0;
-    for (auto l : latencies) sum += l;
+// submit_order (immediate full match)
+static void BM_SubmitImmediateFullMatch(benchmark::State& state) {
+    const size_t batch = static_cast<size_t>(state.range(0));
 
-    return BenchmarkResult{
-        name,
-        sum / static_cast<double>(iterations),
-        static_cast<double>(latencies[iterations / 2]),
-        static_cast<double>(latencies[static_cast<size_t>(iterations * 0.99)]),
-        static_cast<double>(latencies[static_cast<size_t>(iterations * 0.999)]),
-        iterations
+    std::unique_ptr<OrderBook> ob;
+    std::vector<double> ask_prices;
+    uint64_t ts = 0;
+    size_t ask_index = 0;
+
+    auto reset = [&]() {
+        ob = std::make_unique<OrderBook>(kTickSize);
+        ob->reserve_orders(batch * 2);
+        ts = 0;
+        ask_index = 0;
+        preload_asks_increasing(*ob, ask_prices, batch, ts);
     };
+
+    state.PauseTiming();
+    reset();
+    state.ResumeTiming();
+
+    for (auto _ : state) {
+        if (ask_index >= ask_prices.size()) {
+            state.PauseTiming();
+            reset();
+            state.ResumeTiming();
+        }
+
+        benchmark::DoNotOptimize(ob->submit_order(ask_prices[ask_index++], kQty, ts++, Side::BID));
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_SubmitImmediateFullMatch)->Arg(100000)->Unit(benchmark::kNanosecond);
+
+// submit_order (partial match)
+static void BM_SubmitPartialMatch(benchmark::State& state) {
+    const size_t batch = static_cast<size_t>(state.range(0));
+
+    std::unique_ptr<OrderBook> ob;
+    uint64_t ts = 0;
+    uint64_t remaining = 0;
+
+    auto reset = [&]() {
+        ob = std::make_unique<OrderBook>(kTickSize);
+        ob->reserve_orders(batch + 1);
+        ts = 0;
+        remaining = static_cast<uint64_t>(batch) * kQty;
+        ob->submit_order(100.0, remaining, ts++, Side::ASK);
+    };
+
+    state.PauseTiming();
+    reset();
+    state.ResumeTiming();
+
+    for (auto _ : state) {
+        if (remaining == 0) {
+            state.PauseTiming();
+            reset();
+            state.ResumeTiming();
+        }
+
+        benchmark::DoNotOptimize(ob->submit_order(100.0, kQty, ts++, Side::BID));
+        remaining -= kQty;
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_SubmitPartialMatch)->Arg(100000)->Unit(benchmark::kNanosecond);
+
+// cancel_order (multiple levels)
+static void BM_CancelMultipleLevels(benchmark::State& state) {
+    const size_t batch = static_cast<size_t>(state.range(0));
+
+    std::unique_ptr<OrderBook> ob;
+    std::vector<uint64_t> ids;
+    size_t idx = 0;
+
+    auto reset = [&]() {
+        ob = std::make_unique<OrderBook>(kTickSize);
+        ob->reserve_orders(batch);
+        preload_bids_multiple_levels(*ob, ids, batch);
+        idx = 0;
+    };
+
+    state.PauseTiming();
+    reset();
+    state.ResumeTiming();
+
+    for (auto _ : state) {
+        if (idx >= ids.size()) {
+            state.PauseTiming();
+            reset();
+            state.ResumeTiming();
+        }
+
+        benchmark::DoNotOptimize(ob->cancel_order(ids[idx++]));
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_CancelMultipleLevels)->Arg(100000)->Unit(benchmark::kNanosecond);
+
+// cancel_order (single level)
+static void BM_CancelSingleLevel(benchmark::State& state) {
+    const size_t batch = static_cast<size_t>(state.range(0));
+
+    std::unique_ptr<OrderBook> ob;
+    std::vector<uint64_t> ids;
+    size_t idx = 0;
+
+    auto reset = [&]() {
+        ob = std::make_unique<OrderBook>(kTickSize);
+        ob->reserve_orders(batch);
+        preload_bids_single_level(*ob, ids, batch);
+        idx = 0;
+    };
+
+    state.PauseTiming();
+    reset();
+    state.ResumeTiming();
+
+    for (auto _ : state) {
+        if (idx >= ids.size()) {
+            state.PauseTiming();
+            reset();
+            state.ResumeTiming();
+        }
+
+        benchmark::DoNotOptimize(ob->cancel_order(ids[idx++]));
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_CancelSingleLevel)->Arg(100000)->Unit(benchmark::kNanosecond);
+
+// modify_order (decrease qty)
+static void BM_ModifyDecreaseQty(benchmark::State& state) {
+    const size_t batch = static_cast<size_t>(state.range(0));
+
+    std::unique_ptr<OrderBook> ob;
+    std::vector<uint64_t> ids;
+    size_t idx = 0;
+    uint64_t ts = 0;
+
+    auto reset = [&]() {
+        ob = std::make_unique<OrderBook>(kTickSize);
+        ob->reserve_orders(batch);
+        preload_bids_for_modify(*ob, ids, batch);
+        idx = 0;
+        ts = 0;
+    };
+
+    state.PauseTiming();
+    reset();
+    state.ResumeTiming();
+
+    for (auto _ : state) {
+        if (idx >= ids.size()) {
+            state.PauseTiming();
+            reset();
+            state.ResumeTiming();
+        }
+
+        benchmark::DoNotOptimize(ob->modify_order(ids[idx++], 50, ts++));
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_ModifyDecreaseQty)->Arg(100000)->Unit(benchmark::kNanosecond);
+
+// best_bid()
+static void BM_BestBid(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(1000);
+    for (size_t i = 0; i < 1000; ++i) {
+        ob.submit_order(100.0 + static_cast<double>(i % 100) * 0.01, kQty, static_cast<uint64_t>(i), Side::BID);
+    }
+
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(ob.best_bid());
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_BestBid)->Unit(benchmark::kNanosecond);
+
+// best_ask()
+static void BM_BestAsk(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(1000);
+    for (size_t i = 0; i < 1000; ++i) {
+        ob.submit_order(100.0 + static_cast<double>(i % 100) * 0.01, kQty, static_cast<uint64_t>(i), Side::ASK);
+    }
+
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(ob.best_ask());
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_BestAsk)->Unit(benchmark::kNanosecond);
+
+// get_depth(BID, 5)
+static void BM_GetDepthBid5(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(1000);
+    for (size_t i = 0; i < 1000; ++i) {
+        ob.submit_order(100.0 + static_cast<double>(i % 100) * 0.01, kQty, static_cast<uint64_t>(i), Side::BID);
+    }
+
+    for (auto _ : state) {
+        auto depth = ob.get_depth(Side::BID, 5);
+        benchmark::DoNotOptimize(depth);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_GetDepthBid5)->Unit(benchmark::kNanosecond);
+
+// get_spread()
+static void BM_GetSpread(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(2000);
+    for (size_t i = 0; i < 1000; ++i) {
+        ob.submit_order(100.0 + static_cast<double>(i % 100) * 0.01, kQty, static_cast<uint64_t>(i), Side::BID);
+        ob.submit_order(101.0 + static_cast<double>(i % 100) * 0.01, kQty, static_cast<uint64_t>(1000 + i), Side::ASK);
+    }
+
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(ob.get_spread());
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_GetSpread)->Unit(benchmark::kNanosecond);
+
+// get_mid_price()
+static void BM_GetMidPrice(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.submit_order(100.0, 10, 1, Side::BID);
+    ob.submit_order(100.01, 10, 2, Side::ASK);
+
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(ob.get_mid_price());
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_GetMidPrice)->Unit(benchmark::kNanosecond);
+
+// Mixed operations throughput
+static void BM_MixedThroughput(benchmark::State& state) {
+    OrderBook ob(kTickSize);
+    ob.reserve_orders(static_cast<size_t>(state.range(0)));
+    uint64_t ts = 0;
+
+    for (auto _ : state) {
+        const double price = 100.0 + static_cast<double>(ts % 100) * 0.01;
+        const Side side = (ts % 2 == 0) ? Side::BID : Side::ASK;
+        benchmark::DoNotOptimize(ob.submit_order(price, kQty, ts, side));
+        ++ts;
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_MixedThroughput)->Arg(1000000)->Unit(benchmark::kNanosecond);
+
 }
 
-void print_result(const BenchmarkResult& r) {
-    std::cout << std::left << std::setw(40) << r.name
-              << " | avg: " << std::right << std::setw(8) << std::fixed << std::setprecision(1) << r.avg_ns << " ns"
-              << " | p50: " << std::setw(8) << r.p50_ns << " ns"
-              << " | p99: " << std::setw(8) << r.p99_ns << " ns"
-              << " | p99.9: " << std::setw(8) << r.p999_ns << " ns"
-              << "\n";
-    std::cout.flush();
-}
-
-void print_header() {
-    std::cout << "\n" << std::string(110, '=') << "\n";
-    std::cout << "OrderBook Benchmark\n";
-    std::cout << std::string(110, '=') << "\n\n";
-    std::cout.flush();
-}
-
-void print_section(const std::string& name) {
-    std::cout << "\n--- " << name << " " << std::string(60 - name.length(), '-') << "\n";
-    std::cout.flush();
-}
-
-int main() {
-    constexpr size_t ITERATIONS = 100000;
-    constexpr size_t WARMUP = 1000;
-
-    print_header();
-
-    std::vector<BenchmarkResult> results;
-
-    print_section("Submit Order");
-
-    {
-        OrderBook ob(0.01);
-        ob.reserve_orders(ITERATIONS + WARMUP);
-        uint64_t ts = 0;
-        auto result = benchmark("submit_order (no match, building depth)", ITERATIONS, WARMUP,
-            [&]() { ts = 0; },
-            [&](size_t i) {
-                double price = 50.0 + (i % 1000) * 0.01;
-                ob.submit_order(price, 10, ts++, Side::BID);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        OrderBook ob(0.01);
-        ob.reserve_orders(ITERATIONS + WARMUP);
-        uint64_t ts = 0;
-        auto result = benchmark("submit_order (no match, same level)", ITERATIONS, WARMUP,
-            [&]() { ts = 0; },
-            [&](size_t) {
-                ob.submit_order(100.0, 10, ts++, Side::BID);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        std::unique_ptr<OrderBook> ob_ptr;
-        uint64_t ts = 0;
-        size_t ask_index = 0;
-        constexpr size_t TOTAL_OPS = ITERATIONS + WARMUP;
-        std::vector<double> ask_prices;
-        ask_prices.reserve(TOTAL_OPS);
-
-        auto result = benchmark("submit_order (immediate full match)", ITERATIONS, WARMUP,
-            [&]() {
-                ob_ptr = std::make_unique<OrderBook>(0.01);
-                ob_ptr->reserve_orders(TOTAL_OPS);
-                ts = 0;
-                ask_prices.clear();
-
-                for (size_t i = 0; i < TOTAL_OPS; ++i) {
-                    double price = 100.0 + i * 0.01;
-                    ask_prices.push_back(price);
-                    ob_ptr->submit_order(price, 10, ts++, Side::ASK);
-                }
-            },
-            [&](size_t) {
-                double price = ask_prices[ask_index++];
-                ob_ptr->submit_order(price, 10, ts++, Side::BID);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        std::unique_ptr<OrderBook> ob_ptr;
-        uint64_t ts = 0;
-        constexpr size_t TOTAL_OPS = ITERATIONS + WARMUP;
-
-        auto result = benchmark("submit_order (partial match)", ITERATIONS, WARMUP,
-            [&]() {
-                ob_ptr = std::make_unique<OrderBook>(0.01);
-                ob_ptr->reserve_orders(TOTAL_OPS);
-                ts = 0;
-                ob_ptr->submit_order(100.0, static_cast<uint64_t>(TOTAL_OPS) * 10, ts++, Side::ASK);
-            },
-            [&](size_t) {
-                ob_ptr->submit_order(100.0, 10, ts++, Side::BID);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    print_section("Cancel Order");
-
-    {
-        std::unique_ptr<OrderBook> ob_ptr;
-        std::vector<uint64_t> order_ids;
-        constexpr size_t TOTAL_OPS = ITERATIONS + WARMUP;
-        
-        auto result = benchmark("cancel_order (multiple levels)", ITERATIONS, WARMUP,
-            [&]() {
-                ob_ptr = std::make_unique<OrderBook>(0.01);
-                ob_ptr->reserve_orders(TOTAL_OPS);
-                order_ids.clear();
-                order_ids.reserve(TOTAL_OPS);
-                for (size_t i = 0; i < TOTAL_OPS; ++i) {
-                    double price = 100.0 + (i % 1000) * 0.01;
-                    order_ids.push_back(ob_ptr->submit_order(price, 10, i, Side::BID));
-                }
-            },
-            [&](size_t i) {
-                (void)ob_ptr->cancel_order(order_ids[i]);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        std::unique_ptr<OrderBook> ob_ptr;
-        std::vector<uint64_t> order_ids;
-        constexpr size_t TOTAL_OPS = ITERATIONS + WARMUP;
-        
-        auto result = benchmark("cancel_order (single level)", ITERATIONS, WARMUP,
-            [&]() {
-                ob_ptr = std::make_unique<OrderBook>(0.01);
-                ob_ptr->reserve_orders(TOTAL_OPS);
-                order_ids.clear();
-                order_ids.reserve(TOTAL_OPS);
-                for (size_t i = 0; i < TOTAL_OPS; ++i) {
-                    order_ids.push_back(ob_ptr->submit_order(100.0, 10, i, Side::BID));
-                }
-            },
-            [&](size_t i) {
-                (void)ob_ptr->cancel_order(order_ids[i]);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    print_section("Modify Order");
-
-    {
-        std::unique_ptr<OrderBook> ob_ptr;
-        std::vector<uint64_t> order_ids;
-        constexpr size_t TOTAL_OPS = ITERATIONS + WARMUP;
-        
-        auto result = benchmark("modify_order (decrease qty)", ITERATIONS, WARMUP,
-            [&]() {
-                ob_ptr = std::make_unique<OrderBook>(0.01);
-                ob_ptr->reserve_orders(TOTAL_OPS);
-                order_ids.clear();
-                order_ids.reserve(TOTAL_OPS);
-                for (size_t i = 0; i < TOTAL_OPS; ++i) {
-                    double price = 100.0 + (i % 1000) * 0.01;
-                    order_ids.push_back(ob_ptr->submit_order(price, 100, i, Side::BID));
-                }
-            },
-            [&](size_t i) {
-                (void)ob_ptr->modify_order(order_ids[i], 50, i);
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    print_section("Queries");
-
-    {
-        OrderBook ob(0.01);
-        ob.reserve_orders(1000);
-        for (size_t i = 0; i < 1000; ++i) {
-            ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
-        }
-        
-        auto result = benchmark("best_bid()", ITERATIONS, WARMUP,
-            []() {},
-            [&](size_t) {
-                volatile auto* bid = ob.best_bid();
-                (void)bid;
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        OrderBook ob(0.01);
-        ob.reserve_orders(1000);
-        for (size_t i = 0; i < 1000; ++i) {
-            ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::ASK);
-        }
-        
-        auto result = benchmark("best_ask()", ITERATIONS, WARMUP,
-            []() {},
-            [&](size_t) {
-                volatile auto* ask = ob.best_ask();
-                (void)ask;
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    print_section("Depth Queries");
-
-    {
-        OrderBook ob(0.01);
-        ob.reserve_orders(1000);
-        for (size_t i = 0; i < 1000; ++i) {
-            ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
-        }
-        
-        auto result = benchmark("get_depth(BID, 5)", ITERATIONS, WARMUP,
-            []() {},
-            [&](size_t) {
-                volatile auto depth = ob.get_depth(Side::BID, 5);
-                (void)depth;
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        OrderBook ob(0.01);
-        ob.reserve_orders(1000);
-        for (size_t i = 0; i < 1000; ++i) {
-            ob.submit_order(100.0 + (i % 100) * 0.01, 10, i, Side::BID);
-        }
-        
-        auto result = benchmark("get_spread()", ITERATIONS, WARMUP,
-            []() {},
-            [&](size_t) {
-                volatile auto spread = ob.get_spread();
-                (void)spread;
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    {
-        OrderBook ob(0.01);
-        ob.submit_order(100.0, 10, 1, Side::BID);
-        ob.submit_order(100.01, 10, 2, Side::ASK);
-        
-        auto result = benchmark("get_mid_price()", ITERATIONS, WARMUP,
-            []() {},
-            [&](size_t) {
-                volatile auto mid = ob.get_mid_price();
-                (void)mid;
-            });
-        print_result(result);
-        results.push_back(result);
-    }
-
-    print_section("Throughput");
-
-    {
-        OrderBook ob(0.01);
-        constexpr size_t OPS = 1000000;
-        ob.reserve_orders(OPS);
-        
-        auto start = std::chrono::high_resolution_clock::now();
-        
-        for (size_t i = 0; i < OPS; ++i) {
-            double price = 100.0 + (i % 100) * 0.01;
-            Side side = (i % 2 == 0) ? Side::BID : Side::ASK;
-            ob.submit_order(price, 10, i, side);
-        }
-        
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-        double ops_per_sec = static_cast<double>(OPS) / (static_cast<double>(duration_ms) / 1000.0);
-        
-        std::cout << "Mixed operations throughput: " 
-                  << std::fixed << std::setprecision(0) << ops_per_sec
-                  << " ops/sec (" << OPS << " ops in " << duration_ms << " ms)\n";
-    }
-
-    std::cout << "\n" << std::string(110, '=') << "\n";
-    std::cout << "Summary\n";
-    std::cout << std::string(110, '=') << "\n\n";
-
-    std::cout << "| Operation                               | Avg (ns) | P50 (ns) | P99 (ns) | P99.9 (ns) |\n";
-    std::cout << "|-----------------------------------------|----------|----------|----------|------------|\n";
-    for (const auto& r : results) {
-        std::cout << "| " << std::left << std::setw(39) << r.name 
-                  << " | " << std::right << std::setw(8) << static_cast<int>(r.avg_ns)
-                  << " | " << std::setw(8) << static_cast<int>(r.p50_ns)
-                  << " | " << std::setw(8) << static_cast<int>(r.p99_ns)
-                  << " | " << std::setw(10) << static_cast<int>(r.p999_ns) << " |\n";
-    }
-
-    std::cout << "\n";
-
-    return 0;
-}
+BENCHMARK_MAIN();
