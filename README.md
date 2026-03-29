@@ -1,5 +1,7 @@
 # High-Performance Order Book
 
+![C++20](https://img.shields.io/badge/C++-20-blue.svg)
+
 A low-latency limit order book implementation in C++20, designed for high-frequency trading systems.
 
 ## Performance
